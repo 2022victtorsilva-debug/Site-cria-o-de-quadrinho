@@ -1,3 +1,4 @@
+# Publicação automática do aplicativo React
 name: Publicar no GitHub Pages
 
 on:
