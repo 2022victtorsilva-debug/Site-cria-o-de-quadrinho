@@ -2,14 +2,23 @@ import type { LayerItem } from '../types/project'
 
 export type EditorTool = 'select' | 'pencil' | 'brush' | 'marker' | 'eraser' | 'line' | 'arrow' | 'rectangle' | 'square' | 'circle' | 'triangle'
 
+export type SelectionKind = 'none' | 'text' | 'image' | 'shape' | 'bubble' | 'panel' | 'drawing' | 'effect'
+
+export type ElementKind = 'rectangle' | 'square' | 'circle' | 'triangle' | 'star' | 'heart' | 'arrow' | 'line' | 'lightning' | 'cloud' | 'sun' | 'moon' | 'flame' | 'burst' | 'speed-lines'
+
 export type CanvasEditorApi = {
   setTool: (tool: EditorTool) => void
-  addText: () => void
+  addText: (text?: string) => void
   addShape: (shape: EditorTool) => void
+  addElement: (kind: ElementKind) => void
   addImage: (url: string, storagePath?: string) => Promise<void>
-  addBubble: (kind: 'speech' | 'thought' | 'shout' | 'narration') => void
+  addBubble: (kind: 'speech' | 'thought' | 'shout' | 'narration' | 'rounded' | 'rectangle') => void
   addEffect: (text: string) => void
+  addPanel: () => void
   addPanelLayout: (count: number) => void
+  setBackground: (color: string) => void
+  editSelectedText: () => void
+  updateSelectedText: (text: string) => void
   undo: () => void
   redo: () => void
   copy: () => void
@@ -36,7 +45,7 @@ export type CanvasEditorApi = {
 }
 
 export type BrushSettings = { color: string; width: number; opacity: number }
-export type SelectionSettings = Partial<BrushSettings & { fontSize: number; fontFamily: string; bold: boolean; italic: boolean; textAlign: string }>
+export type SelectionSettings = Partial<BrushSettings & { fillColor: string; strokeColor: string; fontSize: number; fontFamily: string; bold: boolean; italic: boolean; textAlign: string }>
 
 export type EditorState = {
   activeTool: EditorTool
@@ -45,5 +54,12 @@ export type EditorState = {
   zoom: number
   hasSelection: boolean
   selectionLocked: boolean
+  selectionKind: SelectionKind
+  selectedText: string
+  selectedFill: string
+  selectedStroke: string
+  selectedFontFamily: string
+  selectedFontSize: number
+  background: string
   layers: LayerItem[]
 }
