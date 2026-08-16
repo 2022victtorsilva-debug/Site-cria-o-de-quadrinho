@@ -18,6 +18,7 @@ export type CanvasEditorApi = {
   addPanelLayout: (count: number) => void
   setBackground: (color: string) => void
   editSelectedText: () => void
+  finishTextEditing: () => void
   updateSelectedText: (text: string) => void
   undo: () => void
   redo: () => void

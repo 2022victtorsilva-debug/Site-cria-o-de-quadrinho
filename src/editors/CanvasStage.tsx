@@ -2,11 +2,9 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'r
 import {
   Canvas, Circle, FabricImage, FabricObject, Group, Line, Path, PencilBrush, Point, Polygon, Rect, Shadow, Textbox, Triangle,
 } from 'fabric'
-import { ImageSearchPanel } from '../components/ImageSearchPanel'
 import { ImageCropperModal } from '../components/ImageCropperModal'
-import { LayersPanel } from '../components/LayersPanel'
 import { Toolbar } from '../components/Toolbar'
-import type { AIImageResult, LayerItem } from '../types/project'
+import type { LayerItem } from '../types/project'
 import type { BrushSettings, CanvasEditorApi, EditorState, EditorTool, ElementKind, SelectionKind, SelectionSettings } from './editorApi'
 
 FabricObject.customProperties = ['data']
@@ -26,6 +24,8 @@ const initialState: EditorState = {
   activeTool: 'select', canUndo: false, canRedo: false, zoom: 1, hasSelection: false, selectionLocked: false,
   selectionKind: 'none', selectedText: '', selectedFill: '#5b4bdb', selectedStroke: '#25233a', selectedFontFamily: 'Fredoka', selectedFontSize: 34, background: '#ffffff', layers: [],
 }
+
+const placementOffsets = [[0, 0], [32, 32], [-32, 32], [32, -32], [-32, -32], [64, 0], [0, 64], [-64, 0], [0, -64]]
 
 function withAlpha(hex: string, opacity: number) {
   const clean = hex.replace('#', '')
@@ -47,7 +47,9 @@ function objectName(object: FabricObject) {
 function setObjectIdentity(object: FabricObject, name?: string) {
   const current = (object as any).data || {}
   ;(object as any).data = { ...current, id: current.id || crypto.randomUUID(), name: name || current.name || objectName(object) }
-  object.set({ cornerColor: '#5b4bdb', cornerStrokeColor: '#ffffff', borderColor: '#5b4bdb', transparentCorners: false, cornerStyle: 'circle', cornerSize: 22, touchCornerSize: 38, padding: 8, centeredRotation: true })
+  object.set({ cornerColor: '#5b4bdb', cornerStrokeColor: '#ffffff', borderColor: '#5b4bdb', transparentCorners: false, cornerStyle: 'circle', cornerSize: 13, touchCornerSize: 34, padding: 7, centeredRotation: true, lockScalingFlip: true })
+  const role = (object as any).data?.role
+  if (object.type === 'image' || role === 'element') object.setControlsVisibility({ ml: false, mr: false, mt: false, mb: false })
 }
 
 function selectionKind(object?: FabricObject | null): SelectionKind {
@@ -87,6 +89,37 @@ function starPoints(points: number, outer: number, inner: number) {
   })
 }
 
+function finite(value: unknown, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+export function sanitizeObjectTransform(object: FabricObject, canvasWidth: number, canvasHeight: number) {
+  const objectWidth = Math.max(1, finite(object.width, 1))
+  const objectHeight = Math.max(1, finite(object.height, 1))
+  const minScaleX = Math.min(1, 20 / objectWidth)
+  const minScaleY = Math.min(1, 20 / objectHeight)
+  let scaleX = clamp(Math.abs(finite(object.scaleX, 1)), minScaleX, 20)
+  let scaleY = clamp(Math.abs(finite(object.scaleY, 1)), minScaleY, 20)
+  const role = (object as any).data?.role
+  if (object.type === 'image' || role === 'element') {
+    const uniform = clamp(Math.max(scaleX, scaleY), Math.max(minScaleX, minScaleY), 20)
+    scaleX = uniform
+    scaleY = uniform
+  }
+  object.set({
+    left: clamp(finite(object.left, canvasWidth / 2), -canvasWidth * 2, canvasWidth * 3),
+    top: clamp(finite(object.top, canvasHeight / 2), -canvasHeight * 2, canvasHeight * 3),
+    scaleX,
+    scaleY,
+    angle: ((finite(object.angle, 0) % 360) + 360) % 360,
+  })
+  object.setCoords()
+}
+
 export function CanvasStage({ canvasKey, json, width, height, background, comic, apiRef, onChange }: Props) {
   const canvasElement = useRef<HTMLCanvasElement>(null)
   const wrapper = useRef<HTMLDivElement>(null)
@@ -101,7 +134,6 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
   const pinch = useRef<{ distance: number; zoom: number } | null>(null)
   const [brush, setBrushState] = useState<BrushSettings>(brushRef.current)
   const [editorState, setEditorState] = useState<EditorState>(initialState)
-  const [panel, setPanel] = useState<'images' | 'layers' | null>(null)
   const [cropSrc, setCropSrc] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const [guides, setGuides] = useState({ x: false, y: false })
@@ -138,22 +170,34 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
   const emitChange = useCallback((recordHistory = true) => {
     const canvas = fabricRef.current
     if (!canvas || loading.current) return
-    const canvasJson = canvas.toJSON()
-    const canvasBackground = typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : background
-    const serialized = JSON.stringify({ canvas: canvasJson, background: canvasBackground })
-    if (recordHistory && history.current[historyIndex.current] !== serialized) {
-      history.current = history.current.slice(0, historyIndex.current + 1)
-      history.current.push(serialized)
-      historyIndex.current = history.current.length - 1
-      if (history.current.length > 60) { history.current.shift(); historyIndex.current -= 1 }
+    try {
+      canvas.getObjects().forEach((object) => sanitizeObjectTransform(object, width, height))
+      const canvasJson = canvas.toJSON()
+      const canvasBackground = typeof canvas.backgroundColor === 'string' ? canvas.backgroundColor : background
+      const serialized = JSON.stringify({ canvas: canvasJson, background: canvasBackground })
+      if (recordHistory && history.current[historyIndex.current] !== serialized) {
+        history.current = history.current.slice(0, historyIndex.current + 1)
+        history.current.push(serialized)
+        historyIndex.current = history.current.length - 1
+        if (history.current.length > 60) { history.current.shift(); historyIndex.current -= 1 }
+      }
+      refreshState(canvas)
+      if (changeTimer.current) window.clearTimeout(changeTimer.current)
+      changeTimer.current = window.setTimeout(() => {
+        try {
+          const thumb = canvas.toDataURL({ format: 'webp', quality: 0.72, multiplier: 0.35 })
+          onChange(canvasJson, thumb, canvasBackground)
+        } catch {
+          setNotice('Não foi possível criar a miniatura, mas seu trabalho continua aberto.')
+          window.setTimeout(() => setNotice(''), 2800)
+        }
+      }, 180)
+    } catch {
+      setNotice('Esse ajuste não pôde ser aplicado. O objeto foi mantido em segurança.')
+      window.setTimeout(() => setNotice(''), 2800)
+      canvas.requestRenderAll()
     }
-    refreshState(canvas)
-    if (changeTimer.current) window.clearTimeout(changeTimer.current)
-    changeTimer.current = window.setTimeout(() => {
-      const thumb = canvas.toDataURL({ format: 'webp', quality: 0.72, multiplier: 0.35 })
-      onChange(canvasJson, thumb, canvasBackground)
-    }, 180)
-  }, [onChange, refreshState])
+  }, [background, height, onChange, refreshState, width])
 
   const configureBrush = useCallback((tool = toolRef.current) => {
     const canvas = fabricRef.current
@@ -171,25 +215,42 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
     const canvas = fabricRef.current
     if (!canvas) return
     loading.current = true
-    const snapshot = JSON.parse(serialized)
-    await canvas.loadFromJSON(snapshot.canvas || snapshot)
-    canvas.backgroundColor = snapshot.background || background
-    canvas.renderAll()
-    loading.current = false
-    refreshState(canvas)
-    emitChange(false)
-  }, [background, emitChange, refreshState])
+    let restored = false
+    try {
+      const snapshot = JSON.parse(serialized)
+      await canvas.loadFromJSON(snapshot.canvas || snapshot)
+      canvas.getObjects().forEach((object) => { setObjectIdentity(object); sanitizeObjectTransform(object, width, height) })
+      canvas.backgroundColor = snapshot.background || background
+      canvas.renderAll()
+      refreshState(canvas)
+      restored = true
+    } catch {
+      setNotice('Não foi possível restaurar essa etapa. O projeto atual foi preservado.')
+      window.setTimeout(() => setNotice(''), 2800)
+    } finally { loading.current = false }
+    if (restored) emitChange(false)
+  }, [background, emitChange, height, refreshState, width])
 
   const addAndSelect = useCallback((object: FabricObject, name?: string) => {
     const canvas = fabricRef.current
     if (!canvas) return
     setObjectIdentity(object, name)
-    object.set({ cornerColor: '#5b4bdb', cornerStrokeColor: '#ffffff', borderColor: '#5b4bdb', transparentCorners: false, cornerStyle: 'circle', cornerSize: 22, touchCornerSize: 38, padding: 8, centeredRotation: true })
+    sanitizeObjectTransform(object, width, height)
     canvas.add(object)
     canvas.setActiveObject(object)
     canvas.renderAll()
     emitChange()
-  }, [emitChange])
+  }, [emitChange, height, width])
+
+  const applyZoom = useCallback((value: number) => {
+    const canvas = fabricRef.current
+    if (!canvas || !Number.isFinite(value)) return
+    const zoom = clamp(value, .2, 3)
+    canvas.setDimensions({ width: Math.max(1, width * zoom), height: Math.max(1, height * zoom) })
+    canvas.setZoom(zoom)
+    canvas.requestRenderAll()
+    refreshState(canvas)
+  }, [height, refreshState, width])
 
   const api: CanvasEditorApi = {
     setTool(tool) {
@@ -207,7 +268,10 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
     },
     addText(text = 'Escreva aqui') {
       api.setTool('select')
-      const textbox = new Textbox(text, { left: width / 2 - 120, top: height / 2 - 40, width: 240, fontSize: 34, fontFamily: 'Fredoka', fill: brushRef.current.color, editable: true })
+      const canvas = fabricRef.current
+      const textCount = canvas?.getObjects().filter((object) => object.type?.includes('text') || textObject(object)).length || 0
+      const [offsetX, offsetY] = placementOffsets[textCount % placementOffsets.length]
+      const textbox = new Textbox(text, { left: width / 2 - 120 + offsetX, top: height / 2 - 40 + offsetY, width: 240, fontSize: 34, fontFamily: 'Fredoka', fill: brushRef.current.color, editable: true })
       addAndSelect(textbox, 'Texto')
       window.setTimeout(() => { textbox.enterEditing(); textbox.selectAll(); textbox.hiddenTextarea?.focus(); refreshState() }, 80)
     },
@@ -257,6 +321,7 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
     async addImage(url, storagePath) {
       api.setTool('select')
       const image = await FabricImage.fromURL(url, { crossOrigin: 'anonymous' })
+      if (!Number.isFinite(image.width) || !Number.isFinite(image.height) || !image.width || !image.height) throw new Error('A imagem recebida possui dimensões inválidas.')
       const max = Math.min(width * .55 / (image.width || 1), height * .55 / (image.height || 1), 1)
       image.set({ left: width / 2, top: height / 2, originX: 'center', originY: 'center', scaleX: max, scaleY: max })
       ;(image as any).data = { id: crypto.randomUUID(), name: 'Imagem', storagePath }
@@ -325,6 +390,18 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
       const text = textObject(active)
       if (active?.type?.includes('text') && text) window.setTimeout(() => { text.enterEditing(); text.selectAll(); text.hiddenTextarea?.focus() }, 40)
     },
+    finishTextEditing() {
+      const canvas = fabricRef.current
+      const active = canvas?.getActiveObject()
+      const text = textObject(active)
+      if (!canvas || !active || !text) return
+      if (text.isEditing) text.exitEditing()
+      canvas.setActiveObject(active)
+      active.setCoords()
+      canvas.requestRenderAll()
+      refreshState(canvas)
+      emitChange()
+    },
     updateSelectedText(value) {
       const canvas = fabricRef.current
       const active = canvas?.getActiveObject()
@@ -346,9 +423,9 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
     bringForward() { const c = fabricRef.current, o = c?.getActiveObject(); if (c && o) { c.bringObjectForward(o); emitChange() } },
     sendBackward() { const c = fabricRef.current, o = c?.getActiveObject(); if (c && o) { c.sendObjectBackwards(o); emitChange() } },
     align(where) { const c = fabricRef.current, o = c?.getActiveObject(); if (!c || !o) return; const bounds = o.getBoundingRect(); if (where === 'left') o.set({ left: 0 }); if (where === 'center') o.set({ left: width / 2, originX: 'center' }); if (where === 'right') o.set({ left: width - bounds.width, originX: 'left' }); if (where === 'top') o.set({ top: 0 }); if (where === 'middle') o.set({ top: height / 2, originY: 'center' }); if (where === 'bottom') o.set({ top: height - bounds.height, originY: 'top' }); o.setCoords(); c.renderAll(); emitChange() },
-    zoomIn() { const c = fabricRef.current; if (c) { const zoom = Math.min(3, c.getZoom() + .1); c.setDimensions({ width: width * zoom, height: height * zoom }); c.setZoom(zoom); refreshState(c) } },
-    zoomOut() { const c = fabricRef.current; if (c) { const zoom = Math.max(.2, c.getZoom() - .1); c.setDimensions({ width: width * zoom, height: height * zoom }); c.setZoom(zoom); refreshState(c) } },
-    fit() { const c = fabricRef.current, el = wrapper.current; if (!c || !el) return; const zoom = Math.min((el.clientWidth - 48) / width, (el.clientHeight - 48) / height, 1); c.setDimensions({ width: width * zoom, height: height * zoom }); c.setZoom(zoom); refreshState(c) },
+    zoomIn() { const c = fabricRef.current; if (c) applyZoom(c.getZoom() + .1) },
+    zoomOut() { const c = fabricRef.current; if (c) applyZoom(c.getZoom() - .1) },
+    fit() { const el = wrapper.current; if (!el) return; applyZoom(Math.min((el.clientWidth - 32) / width, (el.clientHeight - 32) / height, 1)) },
     setBrush(settings) { brushRef.current = settings; setBrushState(settings); configureBrush() },
     updateSelected(settings: SelectionSettings) {
       const canvas = fabricRef.current
@@ -389,34 +466,54 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
     fabricRef.current = canvas
     loading.current = true
     void canvas.loadFromJSON(json).then(() => {
-      canvas.backgroundColor = background; canvas.getObjects().forEach((o) => setObjectIdentity(o)); canvas.renderAll(); loading.current = false
+      canvas.backgroundColor = background; canvas.getObjects().forEach((o) => { setObjectIdentity(o); sanitizeObjectTransform(o, width, height) }); canvas.renderAll(); loading.current = false
       const first = JSON.stringify({ canvas: canvas.toJSON(), background }); history.current = [first]; historyIndex.current = 0; refreshState(canvas); window.setTimeout(() => api.fit(), 0)
+    }).catch(() => {
+      loading.current = false
+      canvas.clear()
+      canvas.backgroundColor = background
+      canvas.renderAll()
+      setNotice('O canvas salvo tinha dados inválidos. Abrimos uma página segura para você continuar.')
     })
     const changed = () => emitChange()
     const selection = () => refreshState(canvas)
-    canvas.on('object:added', changed); canvas.on('object:modified', changed); canvas.on('object:removed', changed); canvas.on('path:created', (event: any) => { if (event.path) { setObjectIdentity(event.path, toolRef.current === 'eraser' ? 'Borracha' : 'Traço'); if (toolRef.current === 'eraser') event.path.set({ globalCompositeOperation: 'destination-out' }) } changed() })
+    const protect = (handler: (event: any) => void) => (event: any) => {
+      try { handler(event) }
+      catch {
+        setNotice('Esse gesto foi interrompido para proteger o projeto.')
+        window.setTimeout(() => setNotice(''), 2400)
+        canvas.requestRenderAll()
+      }
+    }
+    canvas.on('object:added', changed); canvas.on('object:removed', changed); canvas.on('path:created', protect((event: any) => { if (event.path) { setObjectIdentity(event.path, toolRef.current === 'eraser' ? 'Borracha' : 'Traço'); if (toolRef.current === 'eraser') event.path.set({ globalCompositeOperation: 'destination-out' }) } changed() }))
     canvas.on('selection:created', selection); canvas.on('selection:updated', selection); canvas.on('selection:cleared', selection); canvas.on('text:changed', () => { refreshState(canvas); changed() })
-    canvas.on('object:moving', (event: any) => {
+    canvas.on('object:scaling', protect((event: any) => { if (event.target) { sanitizeObjectTransform(event.target, width, height); canvas.requestRenderAll() } }))
+    canvas.on('object:rotating', protect((event: any) => { if (event.target) sanitizeObjectTransform(event.target, width, height) }))
+    canvas.on('object:moving', protect((event: any) => {
       const object = event.target as FabricObject | undefined
       if (!object) return
+      sanitizeObjectTransform(object, width, height)
       const center = object.getCenterPoint()
       const nearX = Math.abs(center.x - width / 2) < 14
       const nearY = Math.abs(center.y - height / 2) < 14
       if (nearX || nearY) object.setPositionByOrigin(new Point(nearX ? width / 2 : center.x, nearY ? height / 2 : center.y), 'center', 'center')
       setGuides((current) => current.x === nearX && current.y === nearY ? current : { x: nearX, y: nearY })
-    })
-    canvas.on('object:modified', () => setGuides({ x: false, y: false }))
-    const touchDistance = (event: TouchEvent) => Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY)
+    }))
+    canvas.on('object:modified', protect((event: any) => { if (event.target) sanitizeObjectTransform(event.target, width, height); setGuides({ x: false, y: false }); changed() }))
+    const touchDistance = (event: TouchEvent) => event.touches.length >= 2 ? Math.hypot(event.touches[0].clientX - event.touches[1].clientX, event.touches[0].clientY - event.touches[1].clientY) : 0
     const touchStart = (event: TouchEvent) => {
       if (event.touches.length !== 2) return
-      pinch.current = { distance: touchDistance(event), zoom: canvas.getZoom() }
+      const distance = touchDistance(event)
+      if (!Number.isFinite(distance) || distance < 2) return
+      pinch.current = { distance, zoom: canvas.getZoom() }
       canvas.isDrawingMode = false
       event.preventDefault()
     }
     const touchMove = (event: TouchEvent) => {
       if (event.touches.length !== 2 || !pinch.current) return
-      const zoom = Math.max(.2, Math.min(3, pinch.current.zoom * touchDistance(event) / pinch.current.distance))
-      canvas.setDimensions({ width: width * zoom, height: height * zoom }); canvas.setZoom(zoom); refreshState(canvas)
+      const distance = touchDistance(event)
+      if (!Number.isFinite(distance) || pinch.current.distance < 2) return
+      applyZoom(pinch.current.zoom * distance / pinch.current.distance)
       event.preventDefault()
     }
     const touchEnd = () => { if (pinch.current) { pinch.current = null; configureBrush() } }
@@ -452,10 +549,8 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
   const closeTips = () => { window.localStorage.setItem('editor-tips-seen', '1'); setShowTips(false) }
 
   return <div className="editor-grid">
-    <Toolbar api={api} state={editorState} brush={brush} onBrush={updateBrush} onImageSearch={() => setPanel(panel === 'images' ? null : 'images')} onUpload={() => document.getElementById('editor-upload')?.click()} onCrop={crop} onLayers={() => setPanel(panel === 'layers' ? null : 'layers')} onBackground={(color) => api.setBackground(color)} comic={comic} />
+    <Toolbar api={api} state={editorState} brush={brush} onBrush={updateBrush} onImageInsert={async (result) => api.addImage(result.url, result.storagePath)} onUpload={() => document.getElementById('editor-upload')?.click()} onCrop={crop} onBackground={(color) => api.setBackground(color)} comic={comic} />
     <div className="canvas-viewport" ref={wrapper}><div className="canvas-shadow">{guides.x && <i className="alignment-guide vertical" />}{guides.y && <i className="alignment-guide horizontal" />}<canvas ref={canvasElement} /></div>{notice && <div className="canvas-notice">{notice}</div>}</div>
-    {panel === 'layers' && <LayersPanel api={api} state={editorState} onClose={() => setPanel(null)} />}
-    {panel === 'images' && <ImageSearchPanel onClose={() => setPanel(null)} onInsert={async (result: AIImageResult) => api.addImage(result.url, result.storagePath)} />}
     {cropSrc && <ImageCropperModal src={cropSrc} onCancel={() => setCropSrc(null)} onApply={async (url) => { await api.replaceSelectedImage(url); setCropSrc(null) }} />}
     {showTips && <div className="first-use-tips"><strong>Três dicas rápidas</strong><span>Toque em <b>Adicionar</b> para colocar texto, imagem ou balão.</span><span>Use <b>Selecionar</b> para mover os objetos.</span><span>Use dois dedos para ampliar a página.</span><button onClick={closeTips}>Entendi</button></div>}
   </div>

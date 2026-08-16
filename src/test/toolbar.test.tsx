@@ -14,7 +14,7 @@ function setup(overrides: Partial<EditorState> = {}) {
     selectionKind: 'none', selectedText: '', selectedFill: '#5b4bdb', selectedStroke: '#25233a', selectedFontFamily: 'Fredoka', selectedFontSize: 34, background: '#ffffff', layers: [], ...overrides,
   }
   const brush: BrushSettings = { color: '#25233a', width: 6, opacity: 1 }
-  render(<Toolbar api={api} state={state} brush={brush} onBrush={vi.fn()} onImageSearch={vi.fn()} onUpload={vi.fn()} onCrop={vi.fn()} onLayers={vi.fn()} onBackground={vi.fn()} comic />)
+  render(<Toolbar api={api} state={state} brush={brush} onBrush={vi.fn()} onImageInsert={vi.fn()} onUpload={vi.fn()} onCrop={vi.fn()} onBackground={vi.fn()} comic />)
   return api
 }
 
@@ -45,5 +45,17 @@ describe('Toolbar do editor', () => {
     setup({ hasSelection: true, selectionKind: 'image' })
     expect(screen.getByText('Imagem selecionado')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Recortar' }).length).toBeGreaterThan(0)
+  })
+
+  it('substitui Adicionar pela pesquisa no mesmo bottom sheet', () => {
+    setup()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Adicionar' })[0])
+    expect(screen.getByRole('region', { name: 'Opções da ferramenta' })).toHaveTextContent('Adicionar')
+    fireEvent.click(screen.getByRole('button', { name: /Pesquisar imagem.*Buscar/i }))
+    const sheet = screen.getByRole('region', { name: 'Opções da ferramenta' })
+    expect(sheet).toHaveTextContent('Pesquisar imagens')
+    expect(sheet).not.toHaveTextContent('Enviar imagem')
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar' }))
+    expect(sheet).toHaveTextContent('Enviar imagem')
   })
 })

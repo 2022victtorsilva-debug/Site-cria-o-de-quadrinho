@@ -1,6 +1,7 @@
 import { BookOpen, ChevronDown, Cloud, CloudOff, Download, FolderOpen, Home, Image, Menu, Paintbrush, Settings, X } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { EditorErrorBoundary } from './components/EditorErrorBoundary'
 import { SaveStatus } from './components/SaveStatus'
 import type { CanvasEditorApi } from './editors/editorApi'
 import { useAutosave } from './hooks/useAutosave'
@@ -78,7 +79,7 @@ export default function App() {
         </div></details>
       </div>
       <input id="editor-upload" className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={onUpload} />
-      <Suspense fallback={<div className="editor-loading">Abrindo o editor...</div>}>{current.type === 'drawing' ? <DrawingEditor project={current} apiRef={apiRef} onChange={updateCurrent} /> : <ComicEditor project={current} apiRef={apiRef} onChange={updateCurrent} />}</Suspense>
+      <EditorErrorBoundary resetKey={current.id}><Suspense fallback={<div className="editor-loading">Abrindo o editor...</div>}>{current.type === 'drawing' ? <DrawingEditor project={current} apiRef={apiRef} onChange={updateCurrent} /> : <ComicEditor project={current} apiRef={apiRef} onChange={updateCurrent} />}</Suspense></EditorErrorBoundary>
     </main> : <Gallery projects={projects} onCreate={create} onOpen={open} onDuplicate={duplicate} onDelete={setDeleteTarget} onExport={(project) => void exportStoredProject(project)} />}
 
     {!supabaseConfigured && <div className="config-banner"><Settings />Supabase não configurado. O app está em modo local.</div>}
