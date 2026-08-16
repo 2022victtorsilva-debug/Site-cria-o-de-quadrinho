@@ -550,7 +550,14 @@ export function CanvasStage({ canvasKey, json, width, height, background, comic,
 
   return <div className="editor-grid">
     <Toolbar api={api} state={editorState} brush={brush} onBrush={updateBrush} onImageInsert={async (result) => api.addImage(result.url, result.storagePath)} onUpload={() => document.getElementById('editor-upload')?.click()} onCrop={crop} onBackground={(color) => api.setBackground(color)} comic={comic} />
-    <div className="canvas-viewport" ref={wrapper}><div className="canvas-shadow">{guides.x && <i className="alignment-guide vertical" />}{guides.y && <i className="alignment-guide horizontal" />}<canvas ref={canvasElement} /></div>{notice && <div className="canvas-notice">{notice}</div>}</div>
+    <div className="canvas-viewport" ref={wrapper}>
+      <div className="canvas-stage-layer">
+        <div className="canvas-shadow"><canvas ref={canvasElement} /></div>
+        {guides.x && <i className="alignment-guide vertical" />}
+        {guides.y && <i className="alignment-guide horizontal" />}
+      </div>
+      {notice && <div className="canvas-notice">{notice}</div>}
+    </div>
     {cropSrc && <ImageCropperModal src={cropSrc} onCancel={() => setCropSrc(null)} onApply={async (url) => { await api.replaceSelectedImage(url); setCropSrc(null) }} />}
     {showTips && <div className="first-use-tips"><strong>Três dicas rápidas</strong><span>Toque em <b>Adicionar</b> para colocar texto, imagem ou balão.</span><span>Use <b>Selecionar</b> para mover os objetos.</span><span>Use dois dedos para ampliar a página.</span><button onClick={closeTips}>Entendi</button></div>}
   </div>
